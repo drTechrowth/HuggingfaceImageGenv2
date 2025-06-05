@@ -1,21 +1,23 @@
 services:
   - type: web
-    name: HuggingfaceImageGenv2
+    name: huggingface-image-gen-v2
     env: python
     region: ohio
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.main
     plan: free
     autoDeploy: true
+    disk:
+      name: model-cache
+      mountPath: /opt/render/project/src/model_cache
+      sizeGB: 10
     envVars:
       - key: PYTHON_VERSION
         value: 3.9.0
-      - key: HF_API_KEY
-        sync: false
-      - key: HF_API_TTI_BASE
-        value: https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell
-      - key: HF_PROMPT_LLM
-        value: https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta
       - key: RENDER
         value: "true"
+      - key: TRANSFORMERS_CACHE
+        value: /opt/render/project/src/model_cache
+      - key: HF_HOME
+        value: /opt/render/project/src/model_cache
     healthCheckPath: /health
