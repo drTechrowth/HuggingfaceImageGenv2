@@ -1,75 +1,135 @@
 import aiohttp
+from PIL import Image
+import io
+from typing import List, Dict
 from ..config import Config
 
-class PromptEnhancer:
+class ImageGenerator:
     def __init__(self):
         self.api_key = Config.HF_API_KEY
-        self.api_url = Config.HF_PROMPT_LLM
+        self.models = [
+            {
+                "name": "SDXL-1.0",
+                "url": "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-1.0",
+                "priority": 1,
+                "strengths": ["photorealistic", "high-quality", "detailed"]
+            },
+            {
+                "name": "FLUX",
+                "url": "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+                "priority": 2,
+                "strengths": ["fast", "reliable"]
+            },
+            {
+                "name": "Realistic-Vision",
+                "url": "https://api-inference.huggingface.co/models/SG161222/Realistic_Vision_V5.1",
+                "priority": 3,
+                "strengths": ["photorealistic", "portraits"]
+            },
+            {
+                "name": "PhotoReal",
+                "url": "https://api-inference.huggingface.co/models/fashioniq/photoreal-xl",
+                "priority": 4,
+                "strengths": ["photorealistic", "commercial"]
+            }
+        ]
 
-    async def enhance_prompt(self, user_intent: str) -> str:
+    def _get_optimal_parameters(self, model_name: str, user_params: dict) -> dict:
         """
-        Enhance user prompt for photorealistic image generation.
+        Get optimized parameters for specific models
+        """
+        base_negative_prompt = "cartoon, anime, illustration, painting, drawing, artwork, graphic, unrealistic, low quality, blurry, distorted"
+        
+        model_specific_params = {
+            "SDXL-1.0": {
+                "negative_prompt": base_negative_prompt,
+                "num_inference_steps": 50,
+                "guidance_scale": 8.5,
+                "size": 1024,
+            },
+            "FLUX": {
+                "negative_prompt": base_negative_prompt,
+                "num_inference_steps": 40,
+                "guidance_scale": 7.5,
+                "size": 768,
+            },
+            "Realistic-Vision": {
+                "negative_prompt": f"{base_negative_prompt}, anime, cartoon, graphic, text, painting, crayon, graphite, abstract, glitch",
+                "num_inference_steps": 45,
+                "guidance_scale": 9.0,
+                "size": 768,
+            },
+            "PhotoReal": {
+                "negative_prompt": f"{base_negative_prompt}, watermark, text, logo, signature",
+                "num_inference_steps": 45,
+                "guidance_scale": 8.0,
+                "size": 896,
+            }
+        }
+        
+        # Get default params for the model
+        default_params = model_specific_params.get(model_name, model_specific_params["SDXL-1.0"])
+        
+        # Update with user params but preserve negative prompt
+        user_negative_prompt = user_params.get("negative_prompt", "")
+        if user_negative_prompt:
+            default_params["negative_prompt"] = f"{default_params['negative_prompt']}, {user_negative_prompt}"
+        
+        # Merge default params with user params
+        return {**default_params, **user_params}
+
+    async def _try_generate_with_model(self, model_info: Dict, prompt: str, params: dict) -> tuple[Image.Image, str]:
+        """
+        Attempt to generate image with a specific model
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
         
-        # Specialized prompt engineering for photorealistic results
-        system_prompt = """<|system|>
-You are an expert at crafting prompts specifically for photorealistic image generation.
-Your task is to enhance user prompts to generate highly realistic, photograph-like images.
-
-Follow these rules for photorealistic prompts:
-1. Always include photography-specific terms (e.g., depth of field, focal length, lighting conditions)
-2. Specify camera details (e.g., DSLR, high-resolution, 8K, RAW format)
-3. Add realistic lighting descriptions (e.g., golden hour, studio lighting, natural sunlight)
-4. Include environment details that ground the image in reality
-5. Use specific materials and textures that exist in the real world
-6. Add photographic composition elements (rule of thirds, leading lines)
-7. Specify time of day and weather conditions when relevant
-8. Include subtle imperfections for realism (slight grain, natural shadows)
-
-AVOID:
-- Cartoon or artistic style terms
-- Fantasy or unrealistic elements
-- Abstract concepts
-- Vague descriptions
-
-FORMAT: Translate the user's intention into a detailed photographic prompt
-WITHOUT any explanations or additional text.</s>
-<|user|>
-Create a photorealistic prompt for: {user_intent}</s>
-<|assistant|>"""
-
+        generation_params = self._get_optimal_parameters(model_info["name"], params)
+        
         payload = {
             "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 200,
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "do_sample": True,
-                "return_full_text": False
-            }
+            "parameters": generation_params
         }
         
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.api_url, headers=headers, json=payload) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise Exception(f"API request failed with status {response.status}: {error_text}")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(model_info["url"], headers=headers, json=payload) as response:
+                if response.status != 200:
+                    raise Exception(f"API request failed with status {response.status}")
+                
+                image_data = await response.read()
+                image = Image.open(io.BytesIO(image_data))
+                
+                # Enhance image quality
+                if hasattr(image, 'filter'):
+                    from PIL import ImageEnhance
+                    enhancer = ImageEnhance.Sharpness(image)
+                    image = enhancer.enhance(1.2)
                     
-                    result = await response.json()
-                    if isinstance(result, list) and len(result) > 0:
-                        # Clean up the response
-                        generated_text = result[0].get('generated_text', '').strip()
-                        # Add photorealistic quality markers if not present
-                        if "photorealistic" not in generated_text.lower():
-                            generated_text = f"photorealistic, highly detailed, 8K UHD, DSLR photograph, {generated_text}"
-                        return generated_text
-                    else:
-                        raise Exception("Unexpected API response format")
-                        
-        except Exception as e:
-            raise Exception(f"Prompt enhancement failed: {str(e)}")
+                    enhancer = ImageEnhance.Contrast(image)
+                    image = enhancer.enhance(1.1)
+                
+                return image, model_info["name"]
+
+    async def generate_image(self, prompt: str, params: dict) -> tuple[Image.Image, str]:
+        """
+        Generate image using multiple models with fallback
+        """
+        errors = []
+        
+        # Try models in priority order
+        for model in sorted(self.models, key=lambda x: x["priority"]):
+            try:
+                image, model_name = await self._try_generate_with_model(model, prompt, params)
+                print(f"Successfully generated image using {model_name}")
+                return image, model_name
+            except Exception as e:
+                error_msg = f"Failed with {model['name']}: {str(e)}"
+                print(error_msg)
+                errors.append(error_msg)
+                continue
+        
+        # If all models fail, raise exception with all error messages
+        raise Exception(f"All image generation attempts failed:\n" + "\n".join(errors))
