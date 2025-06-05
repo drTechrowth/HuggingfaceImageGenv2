@@ -20,7 +20,6 @@ async def generate(user_intent: str, negative_prompt: str = None, num_inference_
     Falls back to original prompt if enhancement fails.
     """
     try:
-        # Create progress
         progress = gr.Progress()
         
         # Try to enhance the prompt
@@ -30,10 +29,9 @@ async def generate(user_intent: str, negative_prompt: str = None, num_inference_
             prompt_to_use = enhanced_prompt
             progress(0.3, desc="Prompt enhanced successfully!")
         except Exception as prompt_error:
-            # If prompt enhancement fails, use the original prompt
             progress(0.3, desc="Prompt enhancement failed, using original prompt...")
             prompt_to_use = user_intent
-            print(f"Prompt enhancement failed: {str(prompt_error)}")  # For logging
+            print(f"Prompt enhancement failed: {str(prompt_error)}")
         
         # Generate image with either enhanced or original prompt
         progress(0.4, desc="Generating image...")
@@ -43,13 +41,13 @@ async def generate(user_intent: str, negative_prompt: str = None, num_inference_
             "guidance_scale": guidance_scale,
         }
         
-        image = await image_generator.generate_image(prompt_to_use, generation_params)
+        image, model_used = await image_generator.generate_image(prompt_to_use, generation_params)
         
         # Complete progress
-        progress(1.0, desc="Complete!")
+        progress(1.0, desc=f"Complete! Generated using {model_used}")
         
-        # Return both the image and the prompt that was actually used
-        return image, prompt_to_use
+        # Return image, used prompt, and model information
+        return image, f"Prompt: {prompt_to_use}\nGenerated using: {model_used}"
             
     except Exception as e:
         raise gr.Error(f"Image generation failed: {str(e)}")
@@ -73,19 +71,19 @@ async def health_check():
 
 # Create Gradio interface
 with gr.Blocks() as demo:
-    gr.Markdown("# 🎨 AI Image Generator with Enhanced Prompts")
+    gr.Markdown("# 🎨 Photorealistic AI Image Generator")
     
     with gr.Row():
         with gr.Column():
             user_intent = gr.Textbox(
                 label="Describe your image idea",
-                placeholder="Example: A serene lake at sunset with mountains in the background",
+                placeholder="Example: A professional DSLR photo of a cat in a garden during golden hour",
                 lines=3
             )
-            enhanced_prompt = gr.Textbox(
-                label="Used Prompt (Enhanced or Original)",
+            generation_info = gr.Textbox(
+                label="Generation Details",
                 interactive=False,
-                info="If prompt enhancement fails, the original prompt will be used"
+                info="Shows the enhanced prompt and which model was used"
             )
             
         with gr.Column():
@@ -102,31 +100,35 @@ with gr.Blocks() as demo:
         )
         with gr.Row():
             num_inference_steps = gr.Slider(
-                minimum=20, maximum=100, value=30,
+                minimum=20, maximum=100, value=50,
                 label="Number of Steps"
             )
             guidance_scale = gr.Slider(
-                minimum=1, maximum=20, value=7.5,
+                minimum=1, maximum=20, value=8.5,
                 label="Guidance Scale"
             )
             
     generate_btn.click(
         fn=generate,
         inputs=[user_intent, negative_prompt, num_inference_steps, guidance_scale],
-        outputs=[output_image, enhanced_prompt]
+        outputs=[output_image, generation_info]
     )
     clear_btn.click(
         fn=lambda: (None, None),
         inputs=[],
-        outputs=[output_image, enhanced_prompt]
+        outputs=[output_image, generation_info]
     )
 
     gr.Markdown("""
-    ### Notes:
-    - If prompt enhancement fails, the system will automatically use your original prompt
-    - The "Used Prompt" field shows which prompt was actually used for generation
+    ### Models Available:
+    1. SDXL 1.0 - Primary model for high-quality photorealistic images
+    2. FLUX - Fast and reliable alternative
+    3. Realistic Vision V5.1 - Specialized in photorealistic portraits
+    4. PhotoReal XL - Commercial-quality photorealism
+    
+    The system will automatically try different models if the primary one fails.
     """)
-
+    
 # Mount Gradio app to FastAPI
 app = gr.mount_gradio_app(app, demo, path="/")
 
