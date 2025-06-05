@@ -17,16 +17,25 @@ image_generator = ImageGenerator()
 async def generate(user_intent: str, negative_prompt: str = None, num_inference_steps: int = 30, guidance_scale: float = 7.5) -> tuple:
     """
     Generate image from user prompt with enhanced prompt engineering.
+    Falls back to original prompt if enhancement fails.
     """
     try:
         # Create progress
         progress = gr.Progress()
         
-        # Update progress for prompt enhancement
-        progress(0.2, desc="Enhancing prompt...")
-        enhanced_prompt = await prompt_enhancer.enhance_prompt(user_intent)
+        # Try to enhance the prompt
+        try:
+            progress(0.2, desc="Enhancing prompt...")
+            enhanced_prompt = await prompt_enhancer.enhance_prompt(user_intent)
+            prompt_to_use = enhanced_prompt
+            progress(0.3, desc="Prompt enhanced successfully!")
+        except Exception as prompt_error:
+            # If prompt enhancement fails, use the original prompt
+            progress(0.3, desc="Prompt enhancement failed, using original prompt...")
+            prompt_to_use = user_intent
+            print(f"Prompt enhancement failed: {str(prompt_error)}")  # For logging
         
-        # Update progress for image generation
+        # Generate image with either enhanced or original prompt
         progress(0.4, desc="Generating image...")
         generation_params = {
             "negative_prompt": negative_prompt,
@@ -34,14 +43,16 @@ async def generate(user_intent: str, negative_prompt: str = None, num_inference_
             "guidance_scale": guidance_scale,
         }
         
-        image = await image_generator.generate_image(enhanced_prompt, generation_params)
+        image = await image_generator.generate_image(prompt_to_use, generation_params)
         
         # Complete progress
         progress(1.0, desc="Complete!")
-        return image, enhanced_prompt
+        
+        # Return both the image and the prompt that was actually used
+        return image, prompt_to_use
             
     except Exception as e:
-        raise gr.Error(f"Generation failed: {str(e)}")
+        raise gr.Error(f"Image generation failed: {str(e)}")
 
 # Create FastAPI app
 app = FastAPI()
@@ -72,8 +83,9 @@ with gr.Blocks() as demo:
                 lines=3
             )
             enhanced_prompt = gr.Textbox(
-                label="Enhanced Prompt (Generated)",
-                interactive=False
+                label="Used Prompt (Enhanced or Original)",
+                interactive=False,
+                info="If prompt enhancement fails, the original prompt will be used"
             )
             
         with gr.Column():
@@ -108,6 +120,12 @@ with gr.Blocks() as demo:
         inputs=[],
         outputs=[output_image, enhanced_prompt]
     )
+
+    gr.Markdown("""
+    ### Notes:
+    - If prompt enhancement fails, the system will automatically use your original prompt
+    - The "Used Prompt" field shows which prompt was actually used for generation
+    """)
 
 # Mount Gradio app to FastAPI
 app = gr.mount_gradio_app(app, demo, path="/")
