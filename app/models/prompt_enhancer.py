@@ -15,15 +15,20 @@ class PromptEnhancer:
             "Content-Type": "application/json"
         }
         
-        system_prompt = """You are an expert at writing prompts for image generation. 
-        Convert the user's input into a detailed, vivid prompt that will generate high-quality images.
+        # Llama-2 specific prompt format
+        prompt = f"""<s>[INST] You are an expert at crafting prompts for AI image generation.
+        Convert this user request into a detailed, vivid prompt that will generate high-quality images.
         Focus on descriptive details, artistic style, lighting, atmosphere, and composition.
-        Keep the output concise but detailed."""
+        Keep the output concise but detailed.
 
+        User Request: {user_intent}
+
+        Generate only the enhanced prompt, no explanations or additional text. [/INST]"""
+        
         payload = {
-            "inputs": f"{system_prompt}\n\nUser: {user_intent}\nAssistant: Generate a detailed image prompt for: {user_intent}\n",
+            "inputs": prompt,
             "parameters": {
-                "max_new_tokens": 150,
+                "max_new_tokens": 200,
                 "temperature": 0.7,
                 "top_p": 0.9,
                 "do_sample": True,
@@ -38,13 +43,14 @@ class PromptEnhancer:
                         error_text = await response.text()
                         raise Exception(f"API request failed with status {response.status}: {error_text}")
                     
-                    if response.content_type == 'application/json':
-                        result = await response.json()
-                        if isinstance(result, list) and len(result) > 0:
-                            return result[0]['generated_text'].strip()
-                        else:
-                            raise Exception("Unexpected API response format")
+                    result = await response.json()
+                    if isinstance(result, list) and len(result) > 0:
+                        # Remove any Llama-2 specific tokens and clean up the response
+                        generated_text = result[0].get('generated_text', '').strip()
+                        generated_text = generated_text.replace('</s>', '').strip()
+                        return generated_text
                     else:
-                        raise Exception(f"Unexpected content type: {response.content_type}")
+                        raise Exception("Unexpected API response format")
+                        
         except Exception as e:
             raise Exception(f"Prompt enhancement failed: {str(e)}")
