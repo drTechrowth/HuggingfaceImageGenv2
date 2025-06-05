@@ -8,23 +8,32 @@ class PromptEnhancer:
 
     async def enhance_prompt(self, user_intent: str) -> str:
         """
-        Enhance user prompt using specialized LLM for better image generation results.
+        Enhance user prompt using Zephyr-7b-beta with specific instruction tuning
+        for image generation prompts.
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
         
-        # Llama-2 specific prompt format
-        prompt = f"""<s>[INST] You are an expert at crafting prompts for AI image generation.
-        Convert this user request into a detailed, vivid prompt that will generate high-quality images.
-        Focus on descriptive details, artistic style, lighting, atmosphere, and composition.
-        Keep the output concise but detailed.
+        # Carefully crafted system and user prompts for Zephyr
+        prompt = f"""<|system|>
+You are a professional prompt engineer specialized in creating detailed, vivid prompts for AI image generation.
+Your task is to enhance user prompts into detailed descriptions that will generate high-quality images.
+Always include these aspects in your enhanced prompts:
+- Main subject details (appearance, pose, expression)
+- Environment/background details
+- Lighting and atmosphere
+- Artistic style
+- Camera angle or perspective
+- Color palette or mood
 
-        User Request: {user_intent}
+Respond ONLY with the enhanced prompt. No explanations, no additional text, no quotes.
+Keep the enhanced prompt concise but detailed.</s>
+<|user|>
+Convert this into a detailed image generation prompt: {user_intent}</s>
+<|assistant|>"""
 
-        Generate only the enhanced prompt, no explanations or additional text. [/INST]"""
-        
         payload = {
             "inputs": prompt,
             "parameters": {
@@ -32,7 +41,8 @@ class PromptEnhancer:
                 "temperature": 0.7,
                 "top_p": 0.9,
                 "do_sample": True,
-                "return_full_text": False
+                "return_full_text": False,
+                "stop": ["</s>", "<|user|>", "<|system|>"]
             }
         }
         
@@ -45,8 +55,9 @@ class PromptEnhancer:
                     
                     result = await response.json()
                     if isinstance(result, list) and len(result) > 0:
-                        # Remove any Llama-2 specific tokens and clean up the response
+                        # Clean up the response
                         generated_text = result[0].get('generated_text', '').strip()
+                        # Remove any system tokens or formatting
                         generated_text = generated_text.replace('</s>', '').strip()
                         return generated_text
                     else:
