@@ -7,17 +7,11 @@ services:
     startCommand: python -m app.main
     plan: free
     autoDeploy: true
-    disk:
-      name: model-cache
-      mountPath: /opt/render/project/src/model_cache
-      sizeGB: 10
     envVars:
       - key: PYTHON_VERSION
         value: 3.9.0
+      - key: HF_API_KEY
+        sync: false
       - key: RENDER
         value: "true"
-      - key: TRANSFORMERS_CACHE
-        value: /opt/render/project/src/model_cache
-      - key: HF_HOME
-        value: /opt/render/project/src/model_cache
     healthCheckPath: /health
