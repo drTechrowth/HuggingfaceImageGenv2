@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: HuggingfaceImageGenv2
+    name: huggingface-image-gen-v2
     env: python
     region: ohio
     buildCommand: pip install -r requirements.txt
@@ -15,7 +15,7 @@ services:
       - key: HF_API_TTI_BASE
         value: https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell
       - key: HF_PROMPT_LLM
-        value: https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2
+        value: https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta
       - key: RENDER
         value: "true"
     healthCheckPath: /health
