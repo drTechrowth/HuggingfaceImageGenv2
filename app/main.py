@@ -19,21 +19,26 @@ async def generate(user_intent: str, negative_prompt: str = None, num_inference_
     Generate image from user prompt with enhanced prompt engineering.
     """
     try:
-        with gr.Progress() as progress:
-            progress(0.2, desc="Enhancing prompt...")
-            enhanced_prompt = await prompt_enhancer.enhance_prompt(user_intent)
-            
-            progress(0.4, desc="Generating image...")
-            generation_params = {
-                "negative_prompt": negative_prompt,
-                "num_inference_steps": num_inference_steps,
-                "guidance_scale": guidance_scale,
-            }
-            
-            image = await image_generator.generate_image(enhanced_prompt, generation_params)
-            
-            progress(1.0, desc="Complete!")
-            return image, enhanced_prompt
+        # Create progress
+        progress = gr.Progress()
+        
+        # Update progress for prompt enhancement
+        progress(0.2, desc="Enhancing prompt...")
+        enhanced_prompt = await prompt_enhancer.enhance_prompt(user_intent)
+        
+        # Update progress for image generation
+        progress(0.4, desc="Generating image...")
+        generation_params = {
+            "negative_prompt": negative_prompt,
+            "num_inference_steps": num_inference_steps,
+            "guidance_scale": guidance_scale,
+        }
+        
+        image = await image_generator.generate_image(enhanced_prompt, generation_params)
+        
+        # Complete progress
+        progress(1.0, desc="Complete!")
+        return image, enhanced_prompt
             
     except Exception as e:
         raise gr.Error(f"Generation failed: {str(e)}")
