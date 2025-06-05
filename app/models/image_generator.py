@@ -1,137 +1,84 @@
-import torch
-from diffusers import (
-    StableDiffusionPipeline, 
-    DPMSolverMultistepScheduler,
-    StableDiffusionXLPipeline
-)
+import aiohttp
 from PIL import Image
 import io
 from typing import List, Dict
-import os
+import asyncio
 from ..config import Config
 
 class ImageGenerator:
     def __init__(self):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.cache_dir = os.path.join(os.getcwd(), "model_cache")
-        os.makedirs(self.cache_dir, exist_ok=True)
-        
+        self.api_key = Config.HF_API_KEY
+        # Using smaller, faster models that are more lenient with rate limits
         self.models = [
             {
-                "name": "CompVis/stable-diffusion-v1-4",
-                "pipeline_class": StableDiffusionPipeline,
+                "name": "CompVis-small",
+                "url": "https://api-inference.huggingface.co/models/CompVis/stable-diffusion-v1-4",
                 "priority": 1,
-                "strengths": ["fast", "reliable", "local"]
             },
             {
-                "name": "runwayml/stable-diffusion-v1-5",
-                "pipeline_class": StableDiffusionPipeline,
+                "name": "RPG",
+                "url": "https://api-inference.huggingface.co/models/nousr/rpg",
                 "priority": 2,
-                "strengths": ["quality", "reliable"]
+            },
+            {
+                "name": "Anything V3",
+                "url": "https://api-inference.huggingface.co/models/Linaqruf/anything-v3.0",
+                "priority": 3,
             }
         ]
+        self.retry_delay = 2
+        self.max_retries = 2
+
+    async def _try_generate_with_model(self, model_info: Dict, prompt: str, params: dict) -> tuple[Image.Image, str]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
         
-        self.loaded_models = {}
-        self._initialize_primary_model()
-
-    def _initialize_primary_model(self):
-        """Initialize the primary model at startup"""
-        primary_model = sorted(self.models, key=lambda x: x["priority"])[0]
-        self._load_model(primary_model["name"], primary_model["pipeline_class"])
-
-    def _load_model(self, model_id: str, pipeline_class) -> any:
-        """Load a model if not already loaded"""
-        if model_id not in self.loaded_models:
-            try:
-                pipeline = pipeline_class.from_pretrained(
-                    model_id,
-                    cache_dir=self.cache_dir,
-                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                    safety_checker=None,
-                    local_files_only=True  # Try local first
-                )
-                if self.device == "cuda":
-                    pipeline = pipeline.to(self.device)
-                # Use DPM++ scheduler for better quality
-                pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
-                    pipeline.scheduler.config
-                )
-                self.loaded_models[model_id] = pipeline
-            except Exception as e:
-                print(f"Failed to load model {model_id} locally, downloading: {str(e)}")
-                # If local load fails, try downloading
-                pipeline = pipeline_class.from_pretrained(
-                    model_id,
-                    cache_dir=self.cache_dir,
-                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                    safety_checker=None
-                )
-                if self.device == "cuda":
-                    pipeline = pipeline.to(self.device)
-                pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
-                    pipeline.scheduler.config
-                )
-                self.loaded_models[model_id] = pipeline
-        return self.loaded_models[model_id]
-
-    def _get_optimal_parameters(self, model_name: str, user_params: dict) -> dict:
-        """Get optimized parameters for specific models"""
-        base_negative_prompt = (
-            "cartoon, anime, illustration, painting, drawing, artwork, graphic, "
-            "unrealistic, low quality, blurry, distorted, watermark, signature, text"
-        )
-        
-        default_params = {
-            "negative_prompt": base_negative_prompt,
-            "num_inference_steps": 30,
-            "guidance_scale": 7.5,
-            "width": 512,
+        # Optimize parameters for faster generation and lower resource usage
+        generation_params = {
+            "negative_prompt": params.get("negative_prompt", "low quality, blurry"),
+            "num_inference_steps": min(params.get("num_inference_steps", 30), 30),  # Cap at 30
+            "guidance_scale": params.get("guidance_scale", 7.5),
+            "width": 512,  # Fixed size for efficiency
             "height": 512
         }
         
-        # Update with user params but preserve negative prompt
-        user_negative_prompt = user_params.get("negative_prompt", "")
-        if user_negative_prompt:
-            default_params["negative_prompt"] = f"{default_params['negative_prompt']}, {user_negative_prompt}"
-        
-        return {**default_params, **user_params}
+        payload = {
+            "inputs": prompt,
+            "parameters": generation_params
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(model_info["url"], headers=headers, json=payload) as response:
+                    if response.status != 200:
+                        raise Exception(f"API request failed with status {response.status}")
+                    
+                    image_data = await response.read()
+                    image = Image.open(io.BytesIO(image_data))
+                    return image, model_info["name"]
+                    
+        except Exception as e:
+            raise Exception(f"Failed with {model_info['name']}: {str(e)}")
 
     async def generate_image(self, prompt: str, params: dict) -> tuple[Image.Image, str]:
-        """Generate image using local models"""
+        """
+        Generate image using multiple models with fallback
+        """
         errors = []
         
+        # Try models in priority order
         for model in sorted(self.models, key=lambda x: x["priority"]):
-            try:
-                # Load model if not already loaded
-                pipeline = self._load_model(model["name"], model["pipeline_class"])
-                
-                # Get optimized parameters
-                generation_params = self._get_optimal_parameters(model["name"], params)
-                
-                # Generate image
-                with torch.no_grad():
-                    output = pipeline(
-                        prompt=prompt,
-                        **generation_params
-                    )
-                
-                image = output.images[0]
-                
-                # Optional image enhancement
-                if hasattr(image, 'filter'):
-                    from PIL import ImageEnhance
-                    enhancer = ImageEnhance.Sharpness(image)
-                    image = enhancer.enhance(1.2)
-                    
-                    enhancer = ImageEnhance.Contrast(image)
-                    image = enhancer.enhance(1.1)
-                
-                return image, f"{model['name']} (Local)"
-                
-            except Exception as e:
-                error_msg = f"Failed with {model['name']}: {str(e)}"
-                print(error_msg)
-                errors.append(error_msg)
-                continue
+            for attempt in range(self.max_retries):
+                try:
+                    return await self._try_generate_with_model(model, prompt, params)
+                except Exception as e:
+                    error_msg = f"Attempt {attempt + 1} failed with {model['name']}: {str(e)}"
+                    print(error_msg)
+                    errors.append(error_msg)
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(self.retry_delay)
+                    continue
         
         raise Exception(f"All image generation attempts failed:\n" + "\n".join(errors))
