@@ -1,7 +1,8 @@
 services:
   - type: web
-    name: huggingface-image-gen
+    name: huggingface-image-gen-v2
     env: python
+    region: ohio
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.main
     plan: free
@@ -15,3 +16,6 @@ services:
         value: https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell
       - key: HF_PROMPT_LLM
         value: https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0
+      - key: RENDER
+        value: "true"
+    healthCheckPath: /health
