@@ -1,89 +1,93 @@
-import aiohttp
+import torch
+from diffusers import (
+    StableDiffusionPipeline, 
+    DPMSolverMultistepScheduler,
+    StableDiffusionXLPipeline
+)
 from PIL import Image
 import io
 from typing import List, Dict
-import asyncio
-import time
+import os
 from ..config import Config
 
 class ImageGenerator:
     def __init__(self):
-        self.api_key = Config.HF_API_KEY
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.cache_dir = os.path.join(os.getcwd(), "model_cache")
+        os.makedirs(self.cache_dir, exist_ok=True)
+        
         self.models = [
             {
-                "name": "SDXL-1.0",
-                "url": "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-1.0",
+                "name": "CompVis/stable-diffusion-v1-4",
+                "pipeline_class": StableDiffusionPipeline,
                 "priority": 1,
-                "strengths": ["photorealistic", "high-quality", "detailed"]
+                "strengths": ["fast", "reliable", "local"]
             },
             {
-                "name": "OpenJourney",
-                "url": "https://api-inference.huggingface.co/models/prompthero/openjourney",
+                "name": "runwayml/stable-diffusion-v1-5",
+                "pipeline_class": StableDiffusionPipeline,
                 "priority": 2,
-                "strengths": ["reliable", "fast", "consistent"]
-            },
-            {
-                "name": "FLUX",
-                "url": "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
-                "priority": 3,
-                "strengths": ["fast", "reliable"]
-            },
-            {
-                "name": "RunwayML",
-                "url": "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5",
-                "priority": 4,
-                "strengths": ["consistent", "reliable"]
-            },
-            {
-                "name": "Realistic-Vision",
-                "url": "https://api-inference.huggingface.co/models/SG161222/Realistic_Vision_V5.1",
-                "priority": 5,
-                "strengths": ["photorealistic", "portraits"]
+                "strengths": ["quality", "reliable"]
             }
         ]
-        self.retry_delay = 1  # Initial retry delay in seconds
-        self.max_retries = 3  # Maximum number of retries per model
+        
+        self.loaded_models = {}
+        self._initialize_primary_model()
+
+    def _initialize_primary_model(self):
+        """Initialize the primary model at startup"""
+        primary_model = sorted(self.models, key=lambda x: x["priority"])[0]
+        self._load_model(primary_model["name"], primary_model["pipeline_class"])
+
+    def _load_model(self, model_id: str, pipeline_class) -> any:
+        """Load a model if not already loaded"""
+        if model_id not in self.loaded_models:
+            try:
+                pipeline = pipeline_class.from_pretrained(
+                    model_id,
+                    cache_dir=self.cache_dir,
+                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                    safety_checker=None,
+                    local_files_only=True  # Try local first
+                )
+                if self.device == "cuda":
+                    pipeline = pipeline.to(self.device)
+                # Use DPM++ scheduler for better quality
+                pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
+                    pipeline.scheduler.config
+                )
+                self.loaded_models[model_id] = pipeline
+            except Exception as e:
+                print(f"Failed to load model {model_id} locally, downloading: {str(e)}")
+                # If local load fails, try downloading
+                pipeline = pipeline_class.from_pretrained(
+                    model_id,
+                    cache_dir=self.cache_dir,
+                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                    safety_checker=None
+                )
+                if self.device == "cuda":
+                    pipeline = pipeline.to(self.device)
+                pipeline.scheduler = DPMSolverMultistepScheduler.from_config(
+                    pipeline.scheduler.config
+                )
+                self.loaded_models[model_id] = pipeline
+        return self.loaded_models[model_id]
 
     def _get_optimal_parameters(self, model_name: str, user_params: dict) -> dict:
-        """
-        Get optimized parameters for specific models
-        """
-        base_negative_prompt = "cartoon, anime, illustration, painting, drawing, artwork, graphic, unrealistic, low quality, blurry, distorted"
+        """Get optimized parameters for specific models"""
+        base_negative_prompt = (
+            "cartoon, anime, illustration, painting, drawing, artwork, graphic, "
+            "unrealistic, low quality, blurry, distorted, watermark, signature, text"
+        )
         
-        model_specific_params = {
-            "SDXL-1.0": {
-                "negative_prompt": base_negative_prompt,
-                "num_inference_steps": 50,
-                "guidance_scale": 8.5,
-                "size": 1024,
-            },
-            "OpenJourney": {
-                "negative_prompt": f"{base_negative_prompt}, text, watermark",
-                "num_inference_steps": 40,
-                "guidance_scale": 7.5,
-                "size": 512,
-            },
-            "FLUX": {
-                "negative_prompt": base_negative_prompt,
-                "num_inference_steps": 40,
-                "guidance_scale": 7.5,
-                "size": 768,
-            },
-            "RunwayML": {
-                "negative_prompt": f"{base_negative_prompt}, signature, watermark",
-                "num_inference_steps": 45,
-                "guidance_scale": 7.5,
-                "size": 512,
-            },
-            "Realistic-Vision": {
-                "negative_prompt": f"{base_negative_prompt}, anime, cartoon, graphic",
-                "num_inference_steps": 45,
-                "guidance_scale": 9.0,
-                "size": 768,
-            }
+        default_params = {
+            "negative_prompt": base_negative_prompt,
+            "num_inference_steps": 30,
+            "guidance_scale": 7.5,
+            "width": 512,
+            "height": 512
         }
-        
-        default_params = model_specific_params.get(model_name, model_specific_params["SDXL-1.0"])
         
         # Update with user params but preserve negative prompt
         user_negative_prompt = user_params.get("negative_prompt", "")
@@ -92,74 +96,42 @@ class ImageGenerator:
         
         return {**default_params, **user_params}
 
-    async def _try_generate_with_model(self, model_info: Dict, prompt: str, params: dict, attempt: int = 1) -> tuple[Image.Image, str]:
-        """
-        Attempt to generate image with a specific model, including retry logic
-        """
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        generation_params = self._get_optimal_parameters(model_info["name"], params)
-        
-        payload = {
-            "inputs": prompt,
-            "parameters": generation_params
-        }
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(model_info["url"], headers=headers, json=payload) as response:
-                    if response.status == 402:
-                        raise Exception("Rate limit exceeded")
-                    elif response.status == 503:
-                        if attempt <= self.max_retries:
-                            await asyncio.sleep(self.retry_delay * attempt)
-                            return await self._try_generate_with_model(model_info, prompt, params, attempt + 1)
-                        raise Exception("Service unavailable")
-                    elif response.status != 200:
-                        raise Exception(f"API request failed with status {response.status}")
-                    
-                    image_data = await response.read()
-                    
-                    try:
-                        image = Image.open(io.BytesIO(image_data))
-                        
-                        # Enhance image quality if possible
-                        if hasattr(image, 'filter'):
-                            from PIL import ImageEnhance
-                            enhancer = ImageEnhance.Sharpness(image)
-                            image = enhancer.enhance(1.2)
-                            
-                            enhancer = ImageEnhance.Contrast(image)
-                            image = enhancer.enhance(1.1)
-                        
-                        return image, model_info["name"]
-                    except Exception as img_error:
-                        raise Exception(f"Failed to process image: {str(img_error)}")
-                        
-        except Exception as e:
-            if attempt <= self.max_retries and "Rate limit" in str(e):
-                await asyncio.sleep(self.retry_delay * attempt)
-                return await self._try_generate_with_model(model_info, prompt, params, attempt + 1)
-            raise e
-
     async def generate_image(self, prompt: str, params: dict) -> tuple[Image.Image, str]:
-        """
-        Generate image using multiple models with fallback and retry logic
-        """
+        """Generate image using local models"""
         errors = []
         
-        # Try models in priority order
         for model in sorted(self.models, key=lambda x: x["priority"]):
             try:
-                return await self._try_generate_with_model(model, prompt, params)
+                # Load model if not already loaded
+                pipeline = self._load_model(model["name"], model["pipeline_class"])
+                
+                # Get optimized parameters
+                generation_params = self._get_optimal_parameters(model["name"], params)
+                
+                # Generate image
+                with torch.no_grad():
+                    output = pipeline(
+                        prompt=prompt,
+                        **generation_params
+                    )
+                
+                image = output.images[0]
+                
+                # Optional image enhancement
+                if hasattr(image, 'filter'):
+                    from PIL import ImageEnhance
+                    enhancer = ImageEnhance.Sharpness(image)
+                    image = enhancer.enhance(1.2)
+                    
+                    enhancer = ImageEnhance.Contrast(image)
+                    image = enhancer.enhance(1.1)
+                
+                return image, f"{model['name']} (Local)"
+                
             except Exception as e:
                 error_msg = f"Failed with {model['name']}: {str(e)}"
-                print(error_msg)  # For logging
+                print(error_msg)
                 errors.append(error_msg)
                 continue
         
-        # If all models fail, raise exception with all error messages
         raise Exception(f"All image generation attempts failed:\n" + "\n".join(errors))
