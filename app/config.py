@@ -14,4 +14,4 @@ def validate_env_vars():
 class Config:
     HF_API_KEY = os.getenv("HF_API_KEY")
     HF_API_TTI_BASE = os.getenv("HF_API_TTI_BASE", "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell")
-    HF_PROMPT_LLM = os.getenv("HF_PROMPT_LLM", "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0")
+    HF_PROMPT_LLM = os.getenv("HF_PROMPT_LLM", "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2")
