@@ -1,5 +1,4 @@
 import aiohttp
-import base64
 from PIL import Image
 import io
 from ..config import Config
@@ -23,12 +22,22 @@ class ImageGenerator:
             "parameters": params
         }
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.api_url, headers=headers, json=payload) as response:
-                result = await response.json()
-                if isinstance(result, dict) and "images" in result:
-                    img_data = base64.b64decode(result["images"][0])
-                else:
-                    img_data = base64.b64decode(result[0])
-                
-                return Image.open(io.BytesIO(img_data))
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.api_url, headers=headers, json=payload) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise Exception(f"API request failed with status {response.status}: {error_text}")
+                    
+                    # Read the image data directly instead of trying to parse as JSON
+                    image_data = await response.read()
+                    
+                    try:
+                        # Try to open the image data
+                        image = Image.open(io.BytesIO(image_data))
+                        return image
+                    except Exception as img_error:
+                        raise Exception(f"Failed to process image data: {str(img_error)}")
+                        
+        except Exception as e:
+            raise Exception(f"Image generation request failed: {str(e)}")
