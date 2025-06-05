@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: huggingface-image-gen-v2
+    name: HuggingfaceImageGenv2
     env: python
     region: ohio
     buildCommand: pip install -r requirements.txt
